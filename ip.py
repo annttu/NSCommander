@@ -25,6 +25,7 @@ import subprocess
 import string
 import random
 import sys
+import os
 import yaml
 import logging
 import jinja2
@@ -32,11 +33,16 @@ import jinja2
 logger = logging.getLogger("ipns")
 
 IPCOMMAND = '/bin/ip'
+KILLCOMMAND = '/bin/kill'
+SYSCTLCOMMAND = '/sbin/sysctl'
 
 
 class IPException(Exception):
     pass
 
+
+class ConfigException(Exception):
+    pass
 
 def random_string(prefix="", length=16):
     return prefix + ''.join([random.choice(string.ascii_lowercase + string.digits) for x in range(length)])
@@ -167,9 +173,9 @@ class IP(object):
             raise IPException("Invalid empty namespace name")
         if name not in self.netns_list():
             self.context.run(IPCOMMAND, 'netns', 'add', name)
-            self.context.run('/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1')
-            self.context.run('/sbin/sysctl', '-w', 'net.ipv4.conf.all.forwarding=1')
-            self.context.run('/sbin/sysctl', '-w', 'net.ipv6.conf.all.forwarding=1')
+            self.context.run(SYSCTLCOMMAND, '-w', 'net.ipv4.ip_forward=1')
+            self.context.run(SYSCTLCOMMAND, '-w', 'net.ipv4.conf.all.forwarding=1')
+            self.context.run(SYSCTLCOMMAND, '-w', 'net.ipv6.conf.all.forwarding=1')
 
 
     def netns_del(self, name):
@@ -190,22 +196,17 @@ class IP(object):
     def interface(self, name):
         return Interface(self.context, name)
 
-    def veth(self, other, my_interface, their_interface):
+    def veth(self, other, my_interface, peer_interface):
         """
         Create virtual ethernet interface between this and other namespace
         :param other: Another namespace where other end of veth is located
         :return: Tuple containing two interfaces
         """
-        #if len(prefix) > 13:
-        #    prefix = prefix[:13]
-        #if not name:
-        #    name = random_string(prefix, length=13 - len(prefix))
-        #my_interface = '%s-a' % name
-        #their_interface = '%s-b' % name
-        self.context.run(IPCOMMAND, 'link', 'add', my_interface, 'type', 'veth', 'peer', 'name', their_interface)
-        self.context.run(IPCOMMAND  , 'link', 'set', their_interface, 'netns', other.name)
-        return self.interface(my_interface), other.ip.interface(their_interface)
+        self.context.run(IPCOMMAND, 'link', 'add', my_interface, 'type', 'veth', 'peer', 'name', peer_interface)
+        self.context.run(IPCOMMAND  , 'link', 'set', peer_interface, 'netns', other.name)
+        return self.interface(my_interface), other.ip.interface(peer_interface)
 
+ip = IP()
 
 class NetNS(object):
     def __init__(self, name):
@@ -217,9 +218,9 @@ class NetNS(object):
         self.ip = IP(namespace=nsname)
 
 
-def expand_string(string, namespace={}):
+def expand_string(string, namespace={}, this=None):
     env = jinja2.Environment()
-    env.globals.update({'namespace': namespace})
+    env.globals.update({'namespace': namespace, 'this': this})
     return env.from_string(string).render()
 
 
@@ -239,74 +240,123 @@ def normalize_config(config):
             namespace['run'] = []
         if 'templates' not in namespace:
             namespace['templates'] = []
+
+        # Handle IPv4 routes
         for route in namespace['routes']:
             if 'destination' not in route:
-                raise IPException("nexthop missing from route on namespace '%s'" % (name))
+                raise ConfigException("nexthop missing from route on namespace '%s'" % (name))
             if 'nexthop' not in route:
-                raise IPException("nexthop missing from route '%s' on namespace '%s'" % (route['destination'], name))
+                raise ConfigException("nexthop missing from route '%s' on namespace '%s'" % (route['destination'], name))
             if type(route['nexthop']) == str:
                 route['nexthop'] = [{'via': route['nexthop']}]
             for nexthop in route['nexthop']:
                 if 'via' not in nexthop:
-                    raise IPException("via parameter missing from route '%s' on namespace '%s'" % (route['destination'], name))
+                    raise ConfigException("via parameter missing from route '%s' on namespace '%s'" % (route['destination'], name))
+                else:
+                    nexthop['via'] = expand_string(nexthop['via'], namespace,
+                                                   this=route)
                 if len(route['nexthop']) > 1:
                     if 'weight' not in nexthop:
                         nexthop['weight'] = "1"
+                    else:
+                        nexthop['weight'] = expand_string(nexthop['weight'],
+                                                          namespace, this=route)
+
+        # Handle IPv6 routes
         for route in namespace['routes6']:
             if 'destination' not in route:
-                raise IPException("nexthop missing from route6 on namespace '%s'" % (name))
+                raise ConfigException("nexthop missing from route6 on namespace '%s'" % (name))
             if 'nexthop' not in route:
-                raise IPException("nexthop missing from route6 '%s' on namespace '%s'" % (route['destination'], name))
+                raise ConfigException("nexthop missing from route6 '%s' on namespace '%s'" % (route['destination'], name))
             if type(route['nexthop']) == str:
                 route['nexthop'] = [{'via': route['nexthop']}]
             for nexthop in route['nexthop']:
                 if 'via' not in nexthop:
-                    raise IPException("via parameter missing from route '%s' on namespace '%s'" % (route['destination'], name))
+                    raise ConfigException("via parameter missing from route '%s' on namespace '%s'" % (route['destination'], name))
+                else:
+                    nexthop['via'] = expand_string(nexthop['via'], namespace,
+                                                   this=route)
                 if len(route['nexthop']) > 1:
                     if 'weight' not in nexthop:
                         nexthop['weight'] = "1"
+                    else:
+                        nexthop['weight'] = expand_string(nexthop['weight'],
+                                                          namespace, this=route)
 
+        # Handle interfaces
+        interfaces = []
         for interface in namespace['interfaces']:
             if 'type' not in interface:
                 interface['type'] = "normal"
             if interface['type'] == 'veth':
                 if 'name_prefix' not in interface:
                     interface['name_prefix'] = random_string("veth-", length=8)
+                else:
+                    interface['name_prefix'] = expand_string(interface['name_prefix'],
+                                                             namespace, this=interface)
+                # Truncate interface name, maximum interface name length is 16
+                interface['name_prefix'] = interface['name_prefix'][:14]
                 if 'my_interface' not in interface:
                     interface['my_interface'] = "%s-a" % interface['name_prefix']
-                if 'their_interface' not in interface:
-                    interface['their_interface'] = "%s-a" % interface['name_prefix']
+                else:
+                    interface['my_interface'] = expand_string(interface['my_interface'],
+                                                              namespace, this=interface)
+                if 'peer_interface' not in interface:
+                    interface['peer_interface'] = "%s-b" % interface['name_prefix']
+                else:
+                    interface['peer_interface'] = expand_string(interface['peer_interface'],
+                                                                 namespace, this=interface)
+                for interface_name in [interface['my_interface'], interface['peer_interface']]:
+                    if interface_name in interfaces:
+                        raise ConfigException("interface '%s' already defined in namespace '%s'" % (
+                                              interface_name, name,))
+                    interfaces.append(interface_name)
             elif interface['type'] == "normal":
-                pass
+                if 'name' not in interface:
+                    raise ConfigException("Name missing from inteface in namespace '%s'" % (name,))
+                interfaces.append(interface['name'])
             else:
-                raise IPException("Unknown interface type %s" % interface['type'])
+                raise ConfigException("Unknown interface type '%s'" % interface['type'])
 
+        # Handle run
         for run in namespace['run']:
             if 'command' not in run:
-                raise IPException("Command missing from run in namespace '%s'" % (name,))
+                raise ConfigException("Command missing from run in namespace '%s'" % (name,))
+            else:
+                run['command'] = expand_string(run['command'], namespace, this=run)
             if 'args' not in run:
                 run['args'] = []
             args = []
             for arg in run['args']:
-                print(arg)
-                args.append(expand_string(arg, namespace))
+                args.append(expand_string(arg, namespace, this=run))
             run['args'] = args
             if 'background' not in run:
                 run['background'] = False
             run['background'] = bool(run['background'])
 
+        # Handle templates
         for template in namespace['templates']:
             if 'source' not in template:
-                raise IPException("source missing from tempate in namespace '%s'" % (name,))
-            template['source'] = expand_string(template['source'], namespace)
+                raise ConfigException("source missing from tempate in namespace '%s'" % (name,))
+            template['source'] = expand_string(template['source'], namespace,
+                                               this=template)
             if 'destination' not in template:
-                raise IPException("destination missing from tempate in namespace '%s'" % (name,))
-            template['destination'] = expand_string(template['destination'], namespace)
-            with open(template['source'], 'rb') as t:
-                with open(template['destination'], 'wb') as o:
-                    o.write(expand_string(t.read().decode("utf-8"), namespace).encode("utf-8"))
+                raise ConfigException("destination missing from tempate in namespace '%s'" % (name,))
+            template['destination'] = expand_string(template['destination'], namespace,
+                                                    this=template)
     return config
 
+def parse_templates(namespace):
+    for template in namespace['templates']:
+        if not os.path.isfile(template['source']):
+            raise ConfigException("%s not such file or directory" % template['source'])
+        destination_folder = os.path.dirname(template['destination'])
+        if not os.path.isdir(destination_folder):
+            raise ConfigException("Destination folder %s is not a directory" % destination_folder)
+        logger.debug("Creating file %s from template %s" % (template['destination'], template['source']))
+        with open(template['source'], 'rb') as t:
+            with open(template['destination'], 'wb') as o:
+                o.write(expand_string(t.read().decode("utf-8"), namespace).encode("utf-8"))
 
 def create_from_config(config):
     namespaces = {}
@@ -325,7 +375,7 @@ def create_from_config(config):
             if interface['type'] == 'veth':
                 (iface1, iface2) = ns.ip.veth(namespaces[interface['peer']],
                                               interface['my_interface'],
-                                              interface['their_interface'])
+                                              interface['peer_interface'])
                 iface1.up()
                 iface2.up()
                 if 'my_address' in interface:
@@ -361,6 +411,10 @@ def create_from_config(config):
                 ns.ip.ecmp_route6(route['destination'], route['nexthop'], state="exists")
             else:
                 ns.ip.route6(route['destination'], route['nexthop'][0]['via'], state="exists")
+    # Create configs
+    for namespace, values in config['namespaces'].items():
+        parse_templates(values)
+
     # Run commands
     for namespace, values in config['namespaces'].items():
         ns = namespaces[namespace]
@@ -377,7 +431,7 @@ def destroy_from_config(config):
             continue
         for pid in ip.context.run(IPCOMMAND, 'netns', 'pids', namespace).splitlines():
             pid = pid.strip()
-            ip.context.run('/bin/kill', pid)
+            ip.context.run(KILLCOMMAND, pid)
         ip.netns_del(namespace)
 
     if 'global' in config['namespaces'].keys():
@@ -388,7 +442,7 @@ def destroy_from_config(config):
                 else:
                     ip.route(route['destination'], route['nexthop'][0]['via'], state="absent")
 
-ip = IP()
+
 
 if __name__ == '__main__':
     logging.basicConfig()
@@ -397,7 +451,7 @@ if __name__ == '__main__':
 
     parser.add_argument("-c", "--config", help="Config file", required=True)
     parser.add_argument("-d", "--debug", help="Enable debug", default=False, action="store_true")
-    parser.add_argument('action', help="Action to do", default="create", choices=["create", "destroy", "dump"])
+    parser.add_argument('action', help="Action to do", default="create", choices=["create", "destroy", "dump", "templates"])
 
     args = parser.parse_args()
 
@@ -418,6 +472,9 @@ if __name__ == '__main__':
         destroy_from_config(config)
     elif args.action == 'dump':
         print(yaml.dump(config, indent=4, default_flow_style=False, default_style='"'))
+    elif args.action == 'templates':
+        for _, namespace in config['namespaces'].items():
+            parse_templates(namespace)
     else:
         print("Invalid action %s" % args.action)
         sys.exit(1)
