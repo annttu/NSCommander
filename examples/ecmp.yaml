@@ -1,0 +1,85 @@
+---
+namespaces:
+     global:
+        router_id: 10.11.20.100
+        interfaces:
+             - type: veth
+               peer: nstest1
+               my_address: 10.11.64.1/30
+               peer_address: 10.11.64.2/30
+             - type: veth
+               peer: nstest3
+               my_address: 10.11.67.1/30
+               peer_address: 10.11.67.2/30
+             - type: veth
+               peer: nstest4
+               my_address: 10.11.62.1/30
+               peer_address: 10.11.62.2/30
+             - name: lo
+               address: 10.11.60.1/30
+        templates:
+             - source:  "examples/ecmp-bird.conf"
+               destination: '/tmp/bird-{{namespace.name}}.conf'
+        run:
+             - command: "/usr/sbin/bird"
+               args: ['-c', '/tmp/bird-{{namespace.name}}.conf', '-s', '/tmp/bird-{{ namespace.name}}']
+               background: True
+
+     nstest1:
+        router_id: 10.11.20.1
+        interfaces:
+             - type: veth
+               peer: nstest2
+               my_address: 10.11.65.1/30
+               peer_address: 10.11.65.2/30
+             - name: lo
+        templates:
+             - source:  "examples/ecmp-bird.conf"
+               destination: '/tmp/bird-{{namespace.name}}.conf'
+        run:
+             - command: "/usr/sbin/bird"
+               args: ['-c', '/tmp/bird-{{namespace.name}}.conf', '-s', '/tmp/bird-{{ namespace.name}}']
+               background: True
+
+     nstest2:
+        router_id: 10.11.20.2
+        interfaces:
+             - name: lo
+               address: 10.11.70.1/24
+        templates:
+             - source:  "examples/ecmp-bird.conf"
+               destination: '/tmp/bird-{{namespace.name}}.conf'
+        run:
+             - command: "/usr/sbin/bird"
+               args: ['-c', '/tmp/bird-{{namespace.name}}.conf', '-s', '/tmp/bird-{{ namespace.name}}']
+               background: True
+
+     nstest3:
+        router_id: 10.11.20.3
+        interfaces:
+             - type: veth
+               peer: nstest2
+               my_address: 10.11.66.1/30
+               peer_address: 10.11.66.2/30
+        templates:
+             - source:  "examples/ecmp-bird.conf"
+               destination: '/tmp/bird-{{namespace.name}}.conf'
+        run:
+             - command: "/usr/sbin/bird"
+               args: ['-c', '/tmp/bird-{{namespace.name}}.conf', '-s', '/tmp/bird-{{ namespace.name}}']
+               background: True
+
+     nstest4:
+        router_id: 10.11.20.4
+        interfaces:
+            - type: veth
+              peer: nstest2
+              my_address: 10.11.69.1/30
+              peer_address: 10.11.69.2/30
+        templates:
+             - source:  "examples/ecmp-bird.conf"
+               destination: '/tmp/bird-{{namespace.name}}.conf'
+        run:
+             - command: "/usr/sbin/bird"
+               args: ['-c', '/tmp/bird-{{namespace.name}}.conf', '-s', '/tmp/bird-{{ namespace.name}}']
+               background: True

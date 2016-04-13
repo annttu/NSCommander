@@ -62,7 +62,7 @@ def normalize_config(config):
                     if 'weight' not in nexthop:
                         nexthop['weight'] = "1"
                     else:
-                        nexthop['weight'] = expand_string(nexthop['weight'],
+                        nexthop['weight'] = expand_string(str(nexthop['weight']),
                                                           namespace, this=route)
 
         # Handle IPv6 routes
