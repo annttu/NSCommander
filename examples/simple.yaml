@@ -1,0 +1,42 @@
+namespaces:
+    nsA: 
+      interfaces:
+          - type: veth
+            peer: nsB
+            my_address: "10.2.3.1/24"
+            peer_address: "10.2.3.2/24"
+            my_address6: "fc01:100a::1/64"
+            peer_address6: "fc01:100a::2/64"
+
+      routes:
+          - destination: 10.2.4.0/24
+            nexthop: 10.2.3.2
+            # nexthop: <ip> is a sortcut to create
+            # nexthop:
+            #   - via: <ip>
+
+      routes6:
+          - destination: "fc01:100b::0/64"
+            nexthop:
+              - via: "fc01:100a::2"
+
+
+    nsB: 
+      interfaces:
+          - type: veth
+            peer: global
+            my_address: "10.2.4.1/24"
+            peer_address: "10.2.4.2/24"
+            my_address6: "fc01:100b::1/64"
+            peer_address6: "fc01:100b::2/64"
+
+    # Global is special name referring to default namespace
+    global:
+        routes:
+           - destination: 10.2.3.0/24
+             nexthop:
+               - via: "10.2.4.1"
+        routes6:
+           - destination: "fc01:100a::/64"
+             nexthop:
+                - via: "fc01:100b::1"

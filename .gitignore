@@ -1,4 +1,5 @@
 data/
 *.iml
 *.yaml
+!examples/*.yaml
 env/
