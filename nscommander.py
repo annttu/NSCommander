@@ -18,7 +18,7 @@ import yaml
 import logging
 import time
 
-from ip import random_string, ip, IPCOMMAND, KILLCOMMAND, logger
+from ip import random_string, ip, IPCOMMAND, KILLCOMMAND, SYSCTLCOMMAND, logger
 
 from templating import expand_string
 
@@ -27,22 +27,24 @@ class ConfigException(Exception):
     pass
 
 
+def check_directory_for(f):
+    destination_folder = os.path.dirname(f)
+        if not os.path.isdir(destination_folder):
+            raise ConfigException("Directory for file %s does not exist" % f)
+
+
 def normalize_config(config):
     if 'namespaces' not in config:
         config['namespaces'] = []
     for name, namespace in config['namespaces'].items():
+        for n in ['routes', 'routes6', 'interfaces', 'templates', 'run']:
+            if n not in namespace:
+                namespace[n] = []
+        for n in ['sysctl']:
+            if n not in namespace:
+                namespace[n] = {}
         if 'name' not in namespace:
             namespace['name'] = name
-        if 'routes' not in namespace:
-            namespace['routes'] = []
-        if 'routes6' not in namespace:
-            namespace['routes6'] = []
-        if 'interfaces' not in namespace:
-            namespace['interfaces'] = []
-        if 'run' not in namespace:
-            namespace['run'] = []
-        if 'templates' not in namespace:
-            namespace['templates'] = []
 
         # Handle IPv4 routes
         for route in namespace['routes']:
@@ -98,17 +100,21 @@ def normalize_config(config):
                     interface['name_prefix'] = expand_string(interface['name_prefix'],
                                                              namespace, this=interface)
                 # Truncate interface name, maximum interface name length is 16
-                interface['name_prefix'] = interface['name_prefix'][:14]
+                interface['name_prefix'] = interface['name_prefix'][:13]
                 if 'my_interface' not in interface:
                     interface['my_interface'] = "%s-a" % interface['name_prefix']
                 else:
                     interface['my_interface'] = expand_string(interface['my_interface'],
                                                               namespace, this=interface)
+                if len(interface['my_interface']) >= 16:
+                    raise ConfigException("My interface name '%s' name too long in namespace '%s'" % (interface['my_interface']), name)
                 if 'peer_interface' not in interface:
                     interface['peer_interface'] = "%s-b" % interface['name_prefix']
                 else:
                     interface['peer_interface'] = expand_string(interface['peer_interface'],
                                                                  namespace, this=interface)
+                if len(interface['peer_interface']) >= 16:
+                    raise ConfigException("Peer interface name '%s' name too long in namespace '%s'" % (interface['peer_interface']), name)
                 for interface_name in [interface['my_interface'], interface['peer_interface']]:
                     if interface_name in interfaces:
                         raise ConfigException("interface '%s' already defined in namespace '%s'" % (
@@ -120,6 +126,10 @@ def normalize_config(config):
                 interfaces.append(interface['name'])
             else:
                 raise ConfigException("Unknown interface type '%s'" % interface['type'])
+
+        # Handle sysctl
+        if type(namespace['sysctl']) != dict:
+            raise ConfigException("Sysctl should be dict in namespace '%s'" % (name,))
 
         # Handle run
         for run in namespace['run']:
@@ -136,6 +146,11 @@ def normalize_config(config):
             if 'background' not in run:
                 run['background'] = False
             run['background'] = bool(run['background'])
+            if 'output_file' not in run:
+                run['output_file'] = None
+            elif run['output_file']:
+                run['output_file'] = expand_string(run['output_file'], namespace, this=run)
+            check_directory_for(run['output_file'])
 
         # Handle templates
         for template in namespace['templates']:
@@ -223,6 +238,13 @@ def create_from_config(config):
                 ns.ip.ecmp_route6(route['destination'], route['nexthop'], state="exists")
             else:
                 ns.ip.route6(route['destination'], route['nexthop'][0]['via'], state="exists")
+    
+    # Run sysctl
+    for namespace, values in config['namespaces'].items():
+        ns = namespaces[namespace]
+        for key, value in values['sysctl'].items():
+            ns.ip.context.run(SYSCTLCOMMAND, '-w', "%s=%s" % (key, str(value)))
+
     # Create configs
     for namespace, values in config['namespaces'].items():
         parse_templates(values)
@@ -231,7 +253,7 @@ def create_from_config(config):
     for namespace, values in config['namespaces'].items():
         ns = namespaces[namespace]
         for run in values['run']:
-            ns.ip.context.run(run['command'], *run['args'], background=run['background'])
+            ns.ip.context.run(run['command'], *run['args'], background=run['background'], output_file=run['output_file'])
 
 
 def destroy_from_config(config):

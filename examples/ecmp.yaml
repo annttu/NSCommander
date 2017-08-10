@@ -33,6 +33,9 @@ namespaces:
                my_address: 10.11.65.1/30
                peer_address: 10.11.65.2/30
              - name: lo
+        sysctl:
+           net.ipv4.icmp_ratelimit: 1
+           net.ipv4.icmp_ratemask: 0000
         templates:
              - source:  "examples/ecmp-bird.conf"
                destination: '/tmp/bird-{{namespace.name}}.conf'
@@ -46,6 +49,9 @@ namespaces:
         interfaces:
              - name: lo
                address: 10.11.70.1/24
+        sysctl:
+           net.ipv4.icmp_ratelimit: 1
+           net.ipv4.icmp_ratemask: 0000
         templates:
              - source:  "examples/ecmp-bird.conf"
                destination: '/tmp/bird-{{namespace.name}}.conf'
@@ -61,6 +67,9 @@ namespaces:
                peer: nstest2
                my_address: 10.11.66.1/30
                peer_address: 10.11.66.2/30
+        sysctl:
+           net.ipv4.icmp_ratelimit: 1
+           net.ipv4.icmp_ratemask: 0000
         templates:
              - source:  "examples/ecmp-bird.conf"
                destination: '/tmp/bird-{{namespace.name}}.conf'
@@ -76,6 +85,9 @@ namespaces:
               peer: nstest2
               my_address: 10.11.69.1/30
               peer_address: 10.11.69.2/30
+        sysctl:
+           net.ipv4.icmp_ratelimit: 1
+           net.ipv4.icmp_ratemask: 0000
         templates:
              - source:  "examples/ecmp-bird.conf"
                destination: '/tmp/bird-{{namespace.name}}.conf'

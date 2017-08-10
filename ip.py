@@ -32,7 +32,7 @@ class IPContext(object):
             return []
         return [IPCOMMAND, 'netns', 'exec', self.namespace]
 
-    def run(self, *args, background=False):
+    def run(self, *args, background=False, output_file=None):
         command = self._ns_prefix() + list(args)
         logger.debug("Executing command: %s" % ' '.join(command))
         p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -43,6 +43,9 @@ class IPContext(object):
 
         if return_code != 0:
             raise IPException("%s command failed:\n%s\n%s" % (' '.join(command), stdout, stderr))
+        if output_file:
+            with open(output_file, 'wb') as o:
+                o.write(stdout)
         return stdout.decode("utf-8")
 
 
